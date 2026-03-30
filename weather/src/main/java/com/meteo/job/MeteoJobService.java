@@ -41,14 +41,6 @@ public class MeteoJobService {
         this.mallaEspana = mallaEspana;
     }
 
-    @PostConstruct
-    public void insertarDatosIniciales() {
-        log.info("Cargando datos iniciales...");
-//        jobForecast();
-//        jobCurrent();
-        jobHistorico();
-    }
-
     // -------------------------------------------------------
     // JOB 1: FORECAST (cada 6 horas, sincronizado con Open-Meteo)
     // -------------------------------------------------------
