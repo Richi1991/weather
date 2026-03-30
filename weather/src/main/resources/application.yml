@@ -1,0 +1,29 @@
+spring:
+  datasource:
+    url: ${DB_URL}?currentSchema=meteo
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jooq:
+    sql-dialect: POSTGRES
+  cache:
+    caffeine:
+      spec: maximumSize=500,expireAfterWrite=3600s
+
+server:
+  port: 8081
+
+meteo:
+  openmeteo:
+    base-url: https://api.open-meteo.com/v1
+    base-url-historico: https://archive-api.open-meteo.com/v1
+    forecast-days: 15
+    paso-malla: 0.75   # grados entre puntos de la malla
+  jobs:
+    forecast-cron: "0 0 */6 * * *"      # cada 6 horas
+    current-cron: "0 0 * * * *"         # cada hora
+    historical-cron: "0 30 3 * * *"     # cada día a las 3:30am
+
+logging:
+  level:
+    com.meteo: DEBUG
