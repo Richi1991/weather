@@ -1,10 +1,12 @@
 package com.meteo.job;
 
 import com.meteo.client.OpenMeteoClient;
+import com.meteo.common.Constantes;
 import com.meteo.config.MallaConfig;
 import com.meteo.model.PuntoMalla;
 import com.meteo.repository.MeteoRepository;
 import jakarta.annotation.PostConstruct;
+import org.jooq.DSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,23 +24,35 @@ public class MeteoJobService {
 
     private static final Logger log = LoggerFactory.getLogger(MeteoJobService.class);
 
-    // Máx puntos por batch para no superar límite de URL (~2000 chars)
-    private static final int BATCH_SIZE = 50;
-    private static final int CHUNK_SIZE = 10;
+    @Autowired
+    private OpenMeteoClient openMeteoClient;
 
-    private final OpenMeteoClient openMeteoClient;
-    private final MeteoRepository meteoRepository;
+    @Autowired
+    private MeteoRepository meteoRepository;
+
     private final List<PuntoMalla> mallaEspana;
+
+    @Autowired
+    private DSLContext dsl;
 
     @Autowired
     private MallaConfig mallaConfig;
 
-    public MeteoJobService(OpenMeteoClient openMeteoClient,
-                           MeteoRepository meteoRepository,
-                           List<PuntoMalla> mallaEspana) {
-        this.openMeteoClient = openMeteoClient;
-        this.meteoRepository = meteoRepository;
+    public MeteoJobService(List<PuntoMalla> mallaEspana) {
         this.mallaEspana = mallaEspana;
+    }
+
+    @Scheduled(fixedRate = 600000)
+    public void keepRenderDespierto() {
+        try {
+            // Una consulta que no pesa nada pero cuenta como actividad
+            dsl.selectOne().execute();
+            // Solo para que lo veas en los logs de Render al principio
+            System.out.println(">>> Keep-Alive: Despertando a Render.");
+        } catch (Exception e) {
+            // Si falla, probablemente es que Neon ya se estaba durmiendo,
+            // la siguiente ejecución lo despertará.
+        }
     }
 
     // -------------------------------------------------------
@@ -51,7 +65,7 @@ public class MeteoJobService {
         int puntosOk = 0;
         int puntosError = 0;
 
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
+        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.BATCH_SIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (List<PuntoMalla> batch : batches) {
@@ -85,7 +99,7 @@ public class MeteoJobService {
         log.info("=== JOB CURRENT iniciado ===");
         long inicio = System.currentTimeMillis();
 
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
+        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.BATCH_SIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (List<PuntoMalla> batch : batches) {
@@ -120,7 +134,7 @@ public class MeteoJobService {
         log.info("=== JOB HISTÓRICO iniciado para fecha: {} ===", aWeekAgo);
         long inicio = System.currentTimeMillis();
 
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, CHUNK_SIZE);
+        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.CHUNK_SIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (List<PuntoMalla> batch : batches) {
