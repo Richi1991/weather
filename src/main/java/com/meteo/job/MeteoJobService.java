@@ -60,12 +60,6 @@ public class MeteoJobService {
         }
     }
 
-    @PostConstruct
-    public void jobExec(){
-        log.info("Puntos en malla España: {}", mallaEspana.size());
-        jobCurrent();
-    }
-
     // -------------------------------------------------------
     // JOB 1: FORECAST (cada 6 horas, sincronizado con Open-Meteo)
     // -------------------------------------------------------
@@ -124,6 +118,7 @@ public class MeteoJobService {
 
             while (intentos < maxIntentos) {
                 try {
+                    
                     OpenMeteoResponse[] responses = openMeteoClient
                             .getCurrentBatch(batch)
                             .get();
@@ -132,7 +127,8 @@ public class MeteoJobService {
                         redisCurrentRepository.saveCurrent(batch.get(i), responses[i]);
                     }
 
-                    Thread.sleep(3000);
+                    Thread.sleep(10000);
+                    
                     break; // éxito — salir del while
 
                 } catch (Exception e) {
