@@ -2,6 +2,7 @@ package com.meteo.controller;
 
 import com.meteo.service.MeteoBboxService;
 import com.meteo.service.MeteoQueryService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,14 +16,12 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class MeteoController {
 
-    private final MeteoQueryService queryService;
-    private final MeteoBboxService bboxService;
+    @Autowired
+    private MeteoQueryService queryService;
 
-    public MeteoController(MeteoQueryService queryService,
-                           MeteoBboxService bboxService) {
-        this.queryService = queryService;
-        this.bboxService  = bboxService;
-    }
+    @Autowired
+    private MeteoBboxService bboxService;
+
 
     // -------------------------------------------------------
     // MAPA MUNDIAL (heatmap al desplazar)
@@ -55,6 +54,33 @@ public class MeteoController {
                 bboxService.getGridPrecipitacionBbox(latMin, latMax, lonMin, lonMax));
     }
 
+    /**
+     * Heatmap de precipitación para el bbox visible en el mapa.
+     * Llamado desde el frontend en cada moveend (con debounce).
+     *
+     * - Si el bbox es España → sirve desde BD (rápido).
+     * - Si es el resto del mundo → proxy a Open-Meteo con cache 1h.
+     *
+     * GET /api/meteo/grid/bbox?latMin=35&latMax=44&lonMin=-10&lonMax=5
+     */
+    @GetMapping("/grid/current/bbox")
+    public ResponseEntity<List<Map<String, Object>>> getGridCurrentBbox(
+            @RequestParam double latMin,
+            @RequestParam double latMax,
+            @RequestParam double lonMin,
+            @RequestParam double lonMax) {
+
+        // Validación básica de coordenadas
+        if (latMin >= latMax || lonMin >= lonMax
+                || latMin < -90 || latMax > 90
+                || lonMin < -180 || lonMax > 180) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        return ResponseEntity.ok(
+                bboxService.getGridCurrentBbox(latMin, latMax, lonMin, lonMax));
+    }
+
     // -------------------------------------------------------
     // ENDPOINTS ORIGINALES (sin cambios)
     // -------------------------------------------------------
@@ -66,7 +92,7 @@ public class MeteoController {
     @GetMapping("/grid/precipitacion")
     public ResponseEntity<List<Map<String, Object>>> getGridPrecipitacion(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fecha) {
-        return ResponseEntity.ok(queryService.getGridPrecipitacion(fecha));
+        return ResponseEntity.ok(bboxService.getGridEspanaCacheado(fecha));
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.meteo.service;
 
 import org.jooq.DSLContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -10,11 +11,8 @@ import java.util.Map;
 @Service
 public class MeteoQueryService {
 
-    private final DSLContext dsl;
-
-    public MeteoQueryService(DSLContext dsl) {
-        this.dsl = dsl;
-    }
+    @Autowired
+    private DSLContext dsl;
 
     /**
      * Grid de precipitación para heatmap (solo lat, lon, precipitacion).

@@ -1,13 +1,18 @@
 package com.meteo.service;
 
 import com.meteo.client.OpenMeteoClient;
+import com.meteo.common.Constantes;
+import com.meteo.model.OpenMeteoResponse;
 import com.meteo.model.PuntoMalla;
+import com.meteo.repository.RedisCurrentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -19,26 +24,17 @@ public class MeteoBboxService {
 
     private static final Logger log = LoggerFactory.getLogger(MeteoBboxService.class);
 
-    // Límites geográficos de España (península + islas)
-    private static final double ESP_LAT_MIN =  27.5;
-    private static final double ESP_LAT_MAX =  43.8;
-    private static final double ESP_LON_MIN = -18.2;
-    private static final double ESP_LON_MAX =   4.4;
-
-    // Máx puntos por llamada a Open-Meteo
-    private static final int BATCH_SIZE = 50;
-
     @Value("${meteo.openmeteo.paso-malla}")
-    private double pasoMalla;  // 0.75 grados
+    private double pasoMalla;  // 0.25 grados
 
-    private final OpenMeteoClient openMeteoClient;
-    private final MeteoQueryService queryService;
+    @Autowired
+    private OpenMeteoClient openMeteoClient;
 
-    public MeteoBboxService(OpenMeteoClient openMeteoClient,
-                            MeteoQueryService queryService) {
-        this.openMeteoClient = openMeteoClient;
-        this.queryService = queryService;
-    }
+    @Autowired
+    private MeteoQueryService queryService;
+
+    @Autowired
+    private RedisCurrentRepository redisCurrentRepository;
 
     /**
      * Punto de entrada principal desde el controller.
@@ -70,6 +66,21 @@ public class MeteoBboxService {
         );
     }
 
+    public List<Map<String, Object>> getGridCurrentBbox(
+            double latMin, double latMax, double lonMin, double lonMax) {
+
+        if (esDentroEspana(latMin, latMax, lonMin, lonMax)) {
+            return redisCurrentRepository.getCurrentBbox(latMin, latMax, lonMin, lonMax);
+        }
+
+        return getGridCurrentMundialCacheado(
+                redondearBbox(latMin),
+                redondearBbox(latMax),
+                redondearBbox(lonMin),
+                redondearBbox(lonMax)
+        );
+    }
+
     /**
      * Llama a Open-Meteo para el bbox dado y cachea el resultado 1 hora.
      *
@@ -87,7 +98,7 @@ public class MeteoBboxService {
         log.debug("Cache miss - llamando Open-Meteo para {} puntos", puntos.size());
 
         List<Map<String, Object>> resultado = new ArrayList<>();
-        List<List<PuntoMalla>> batches = dividirEnBatches(puntos, BATCH_SIZE);
+        List<List<PuntoMalla>> batches = dividirEnBatches(puntos, Constantes.BATCH_SIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (List<PuntoMalla> batch : batches) {
@@ -120,6 +131,50 @@ public class MeteoBboxService {
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         return resultado;
+    }
+
+    @Cacheable(value = "bbox-current",
+            key = "#latMin + ':' + #latMax + ':' + #lonMin + ':' + #lonMax")
+    public List<Map<String, Object>> getGridCurrentMundialCacheado(
+            double latMin, double latMax, double lonMin, double lonMax) {
+
+        List<PuntoMalla> puntos = generarPuntosMalla(latMin, latMax, lonMin, lonMax);
+        if (puntos.isEmpty()) return List.of();
+
+        List<Map<String, Object>> resultado = new ArrayList<>();
+        List<List<PuntoMalla>> batches = dividirEnBatches(puntos, Constantes.BATCH_SIZE);
+
+        for (List<PuntoMalla> batch : batches) {
+            try {
+                OpenMeteoResponse[] responses = openMeteoClient
+                        .getCurrentBatch(batch)
+                        .get();
+
+                for (int i = 0; i < responses.length; i++) {
+                    var r = responses[i];
+                    if (r == null || r.current() == null) continue;
+
+                    var punto = batch.get(i);
+                    Map<String, Object> fila = new HashMap<>();
+                    fila.put("latitud",        punto.getLatitud());
+                    fila.put("longitud",       punto.getLongitud());
+                    fila.put("temperature_2m", r.current().temperature2m());
+                    fila.put("weathercode",    r.current().weathercode());
+                    fila.put("windspeed_10m",  r.current().windspeed());
+                    fila.put("precipitation",  r.current().precipitation());
+                    synchronized (resultado) { resultado.add(fila); }
+                }
+                Thread.sleep(300);
+            } catch (Exception e) {
+                log.error("Error en batch current mundial: {}", e.getMessage());
+            }
+        }
+        return resultado;
+    }
+
+    @Cacheable(value = "grid-espana", key = "#fecha.toString()")
+    public List<Map<String, Object>> getGridEspanaCacheado(LocalDate fecha) {
+        return queryService.getGridPrecipitacion(fecha);
     }
 
     /**
@@ -187,8 +242,8 @@ public class MeteoBboxService {
      */
     private boolean esDentroEspana(double latMin, double latMax,
                                     double lonMin, double lonMax) {
-        return latMin >= ESP_LAT_MIN - 1 && latMax <= ESP_LAT_MAX + 1
-            && lonMin >= ESP_LON_MIN - 1 && lonMax <= ESP_LON_MAX + 1;
+        return latMin >= Constantes.ESP_LAT_MIN - 1 && latMax <= Constantes.ESP_LAT_MAX + 1
+            && lonMin >= Constantes.ESP_LON_MIN - 1 && lonMax <= Constantes.ESP_LON_MAX + 1;
     }
 
     private <T> List<List<T>> dividirEnBatches(List<T> lista, int tamano) {

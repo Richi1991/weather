@@ -100,43 +100,6 @@ public class MeteoRepository {
     }
 
     // -------------------------------------------------------
-    // INSERT CURRENT
-    // -------------------------------------------------------
-    public void insertCurrent(PuntoMalla punto, OpenMeteoResponse response) {
-        if (response == null || response.current() == null) return;
-
-        Integer puntoId = obtenerOCrearPunto(punto);
-        var c = response.current();
-
-        try {
-            dsl.execute("""
-                INSERT INTO meteo.current (
-                    punto_id, timestamp,
-                    temperature_2m, apparent_temperature,
-                    relative_humidity_2m, dewpoint_2m,
-                    precipitation, rain, snowfall,
-                    windspeed_10m, windgusts_10m, winddirection_10m,
-                    surface_pressure, cloudcover, visibility,
-                    shortwave_radiation, uv_index, weathercode, is_day
-                ) VALUES (?, ?::timestamptz, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (punto_id, timestamp) DO NOTHING
-                """,
-                    puntoId, parseTimestamp(c.time()),
-                    c.temperature2m(), c.apparentTemperature(),
-                    c.relativeHumidity(), c.dewpoint(),
-                    c.precipitation(), c.rain(), c.snowfall(),
-                    c.windspeed(), c.windgusts(), c.winddirection(),
-                    c.surfacePressure(), c.cloudcover(), c.visibility(),
-                    c.shortwaveRadiation(), c.uvIndex(), c.weathercode(),
-                    c.isDay() != null && c.isDay() == 1
-            );
-        } catch (Exception e) {
-            log.warn("Error insertando current para punto ({},{}): {}",
-                    punto.getLatitud(), punto.getLongitud(), e.getMessage());
-        }
-    }
-
-    // -------------------------------------------------------
     // UPSERT HISTÓRICO
     // -------------------------------------------------------
     public void upsertHistorico(PuntoMalla punto, OpenMeteoResponse response) {

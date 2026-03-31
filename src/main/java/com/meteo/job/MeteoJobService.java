@@ -3,8 +3,10 @@ package com.meteo.job;
 import com.meteo.client.OpenMeteoClient;
 import com.meteo.common.Constantes;
 import com.meteo.config.MallaConfig;
+import com.meteo.model.OpenMeteoResponse;
 import com.meteo.model.PuntoMalla;
 import com.meteo.repository.MeteoRepository;
+import com.meteo.repository.RedisCurrentRepository;
 import jakarta.annotation.PostConstruct;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
@@ -18,6 +20,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+
+import static com.meteo.common.Constantes.BATCH_SIZE;
 
 @Service
 public class MeteoJobService {
@@ -36,7 +40,8 @@ public class MeteoJobService {
     private DSLContext dsl;
 
     @Autowired
-    private MallaConfig mallaConfig;
+    private RedisCurrentRepository redisCurrentRepository;
+
 
     public MeteoJobService(List<PuntoMalla> mallaEspana) {
         this.mallaEspana = mallaEspana;
@@ -55,6 +60,12 @@ public class MeteoJobService {
         }
     }
 
+    @PostConstruct
+    public void jobExec(){
+        log.info("Puntos en malla España: {}", mallaEspana.size());
+        jobCurrent();
+    }
+
     // -------------------------------------------------------
     // JOB 1: FORECAST (cada 6 horas, sincronizado con Open-Meteo)
     // -------------------------------------------------------
@@ -65,7 +76,7 @@ public class MeteoJobService {
         int puntosOk = 0;
         int puntosError = 0;
 
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.BATCH_SIZE);
+        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (List<PuntoMalla> batch : batches) {
@@ -74,6 +85,11 @@ public class MeteoJobService {
                     .thenAccept(responses -> {
                         for (int i = 0; i < responses.length; i++) {
                             meteoRepository.upsertForecast(batch.get(i), responses[i]);
+                            try {
+                                Thread.sleep(200);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
                         }
                     })
                     .exceptionally(e -> {
@@ -99,25 +115,40 @@ public class MeteoJobService {
         log.info("=== JOB CURRENT iniciado ===");
         long inicio = System.currentTimeMillis();
 
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.BATCH_SIZE);
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
 
-        for (List<PuntoMalla> batch : batches) {
-            CompletableFuture<Void> future = openMeteoClient
-                    .getCurrentBatch(batch)
-                    .thenAccept(responses -> {
-                        for (int i = 0; i < responses.length; i++) {
-                            meteoRepository.insertCurrent(batch.get(i), responses[i]);
-                        }
-                    })
-                    .exceptionally(e -> {
-                        log.error("Error en batch current: {}", e.getMessage());
-                        return null;
-                    });
-            futures.add(future);
+        for (int b = 0; b < batches.size(); b++) {
+            List<PuntoMalla> batch = batches.get(b);
+            int intentos = 0;
+            int maxIntentos = 3;
+
+            while (intentos < maxIntentos) {
+                try {
+                    OpenMeteoResponse[] responses = openMeteoClient
+                            .getCurrentBatch(batch)
+                            .get();
+
+                    for (int i = 0; i < responses.length; i++) {
+                        redisCurrentRepository.saveCurrent(batch.get(i), responses[i]);
+                    }
+
+                    Thread.sleep(3000);
+                    break; // éxito — salir del while
+
+                } catch (Exception e) {
+                    intentos++;
+                    if (e.getMessage() != null && e.getMessage().contains("429")) {
+                        long espera = 2000L * intentos; // 2s, 4s, 6s
+                        log.warn("429 en batch {} — reintentando en {}ms (intento {}/{})",
+                                b, espera, intentos, maxIntentos);
+                        try { Thread.sleep(espera); } catch (InterruptedException ignored) {}
+                    } else {
+                        log.error("Error en batch current {}: {}", b, e.getMessage());
+                        break;
+                    }
+                }
+            }
         }
-
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
         long duracion = System.currentTimeMillis() - inicio;
         log.info("=== JOB CURRENT completado en {}ms ===", duracion);
@@ -143,6 +174,11 @@ public class MeteoJobService {
                     .thenAccept(responses -> {
                         for (int i = 0; i < responses.length; i++) {
                             meteoRepository.upsertHistorico(batch.get(i), responses[i]);
+                            try {
+                                Thread.sleep(200);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
                         }
                     })
                     .exceptionally(e -> {
