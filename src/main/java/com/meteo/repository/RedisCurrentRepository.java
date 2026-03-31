@@ -2,6 +2,7 @@ package com.meteo.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meteo.common.Constantes;
+import com.meteo.dto.CurrentGridDTO;
 import com.meteo.model.OpenMeteoResponse;
 import com.meteo.model.PuntoMalla;
 import org.slf4j.Logger;
@@ -106,16 +107,38 @@ public class RedisCurrentRepository {
     // -------------------------------------------------------
     // OBTENER current por bbox
     // -------------------------------------------------------
-    public List<Map<String, Object>> getCurrentBbox(
+    public List<CurrentGridDTO> getCurrentBbox(
             double latMin, double latMax, double lonMin, double lonMax) {
 
         return getAllCurrentEspana().stream()
                 .filter(p -> {
-                    double lat = (double) p.getOrDefault("latitud", 0.0);
-                    double lon = (double) p.getOrDefault("longitud", 0.0);
+                    double lat = ((Number) p.getOrDefault("latitud", 0.0)).doubleValue();
+                    double lon = ((Number) p.getOrDefault("longitud", 0.0)).doubleValue();
                     return lat >= latMin && lat <= latMax
                             && lon >= lonMin && lon <= lonMax;
                 })
+                .map(p -> new CurrentGridDTO(
+                        ((Number) p.getOrDefault("latitud", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("longitud", 0.0)).doubleValue(),
+                        (String) p.getOrDefault("timestamp", ""),
+                        ((Number) p.getOrDefault("temperature_2m", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("apparent_temperature", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("relative_humidity_2m", 0)).intValue(),
+                        ((Number) p.getOrDefault("dewpoint_2m", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("precipitation", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("rain", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("snowfall", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("windspeed_10m", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("windgusts_10m", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("winddirection_10m", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("surface_pressure", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("cloudcover", 0)).intValue(),
+                        ((Number) p.getOrDefault("visibility", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("shortwave_radiation", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("uv_index", 0.0)).doubleValue(),
+                        ((Number) p.getOrDefault("weathercode", 0)).intValue(),
+                        (Boolean) p.getOrDefault("is_day", false)
+                ))
                 .toList();
     }
 

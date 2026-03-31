@@ -2,6 +2,7 @@ package com.meteo.service;
 
 import com.meteo.client.OpenMeteoClient;
 import com.meteo.common.Constantes;
+import com.meteo.dto.CurrentGridDTO;
 import com.meteo.model.OpenMeteoResponse;
 import com.meteo.model.PuntoMalla;
 import com.meteo.repository.RedisCurrentRepository;
@@ -66,7 +67,7 @@ public class MeteoBboxService {
         );
     }
 
-    public List<Map<String, Object>> getGridCurrentBbox(
+    public List<CurrentGridDTO> getGridCurrentBbox(
             double latMin, double latMax, double lonMin, double lonMax) {
 
         if (esDentroEspana(latMin, latMax, lonMin, lonMax)) {
@@ -135,13 +136,13 @@ public class MeteoBboxService {
 
     @Cacheable(value = "bbox-current",
             key = "#latMin + ':' + #latMax + ':' + #lonMin + ':' + #lonMax")
-    public List<Map<String, Object>> getGridCurrentMundialCacheado(
+    public List<CurrentGridDTO> getGridCurrentMundialCacheado(
             double latMin, double latMax, double lonMin, double lonMax) {
 
         List<PuntoMalla> puntos = generarPuntosMalla(latMin, latMax, lonMin, lonMax);
         if (puntos.isEmpty()) return List.of();
 
-        List<Map<String, Object>> resultado = new ArrayList<>();
+        List<CurrentGridDTO> resultado = new ArrayList<>();
         List<List<PuntoMalla>> batches = dividirEnBatches(puntos, Constantes.BATCH_SIZE);
 
         for (List<PuntoMalla> batch : batches) {
@@ -155,14 +156,32 @@ public class MeteoBboxService {
                     if (r == null || r.current() == null) continue;
 
                     var punto = batch.get(i);
-                    Map<String, Object> fila = new HashMap<>();
-                    fila.put("latitud",        punto.getLatitud());
-                    fila.put("longitud",       punto.getLongitud());
-                    fila.put("temperature_2m", r.current().temperature2m());
-                    fila.put("weathercode",    r.current().weathercode());
-                    fila.put("windspeed_10m",  r.current().windspeed());
-                    fila.put("precipitation",  r.current().precipitation());
-                    synchronized (resultado) { resultado.add(fila); }
+                    var c = r.current();
+
+                    synchronized (resultado) {
+                        resultado.add(new CurrentGridDTO(
+                                punto.getLatitud(),
+                                punto.getLongitud(),
+                                c.time(),
+                                c.temperature2m()        != null ? c.temperature2m()        : 0.0,
+                                c.apparentTemperature()  != null ? c.apparentTemperature()  : 0.0,
+                                c.relativeHumidity()     != null ? c.relativeHumidity()     : 0,
+                                c.dewpoint()             != null ? c.dewpoint()             : 0.0,
+                                c.precipitation()        != null ? c.precipitation()        : 0.0,
+                                c.rain()                 != null ? c.rain()                 : 0.0,
+                                c.snowfall()             != null ? c.snowfall()             : 0.0,
+                                c.windspeed()            != null ? c.windspeed()            : 0.0,
+                                c.windgusts()            != null ? c.windgusts()            : 0.0,
+                                c.winddirection()        != null ? c.winddirection()        : 0.0,
+                                c.surfacePressure()      != null ? c.surfacePressure()      : 0.0,
+                                c.cloudcover()           != null ? c.cloudcover()           : 0,
+                                c.visibility()           != null ? c.visibility()           : 0.0,
+                                c.shortwaveRadiation()   != null ? c.shortwaveRadiation()   : 0.0,
+                                c.uvIndex()              != null ? c.uvIndex()              : 0.0,
+                                c.weathercode()          != null ? c.weathercode()          : 0,
+                                c.isDay()                != null && c.isDay() == 1
+                        ));
+                    }
                 }
                 Thread.sleep(300);
             } catch (Exception e) {

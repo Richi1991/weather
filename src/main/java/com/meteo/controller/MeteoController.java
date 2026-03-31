@@ -1,5 +1,6 @@
 package com.meteo.controller;
 
+import com.meteo.dto.CurrentGridDTO;
 import com.meteo.service.MeteoBboxService;
 import com.meteo.service.MeteoQueryService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,7 +65,7 @@ public class MeteoController {
      * GET /api/meteo/grid/bbox?latMin=35&latMax=44&lonMin=-10&lonMax=5
      */
     @GetMapping("/grid/current/bbox")
-    public ResponseEntity<List<Map<String, Object>>> getGridCurrentBbox(
+    public ResponseEntity<List<CurrentGridDTO>> getGridCurrentBbox(
             @RequestParam double latMin,
             @RequestParam double latMax,
             @RequestParam double lonMin,
