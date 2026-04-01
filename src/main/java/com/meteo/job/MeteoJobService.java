@@ -3,10 +3,15 @@ package com.meteo.job;
 import com.meteo.client.OpenMeteoClient;
 import com.meteo.common.Constantes;
 import com.meteo.config.MallaConfig;
+import com.meteo.dto.CurrentGridDTO;
 import com.meteo.model.OpenMeteoResponse;
 import com.meteo.model.PuntoMalla;
+import com.meteo.model.PuntoTemperatura;
 import com.meteo.repository.MeteoRepository;
 import com.meteo.repository.RedisCurrentRepository;
+import com.meteo.repository.RedisRasterRepository;
+import com.meteo.service.InterpolacionService;
+import com.meteo.service.RasterService;
 import jakarta.annotation.PostConstruct;
 import org.jooq.DSLContext;
 import org.slf4j.Logger;
@@ -43,6 +48,14 @@ public class MeteoJobService {
     @Autowired
     private RedisCurrentRepository redisCurrentRepository;
 
+    @Autowired
+    private InterpolacionService interpolacionService;
+
+    @Autowired
+    private RasterService rasterService;
+
+    @Autowired
+    private RedisRasterRepository redisRasterRepository;
 
     public MeteoJobService(List<PuntoMalla> mallaEspana) {
         this.mallaEspana = mallaEspana;
@@ -64,44 +77,44 @@ public class MeteoJobService {
     // -------------------------------------------------------
     // JOB 1: FORECAST (cada 6 horas, sincronizado con Open-Meteo)
     // -------------------------------------------------------
-    @Scheduled(cron = "${meteo.jobs.forecast-cron}")
-    public void jobForecast() {
-        log.info("=== JOB FORECAST iniciado. {} puntos totales ===", mallaEspana.size());
-        long inicio = System.currentTimeMillis();
-        int puntosOk = 0;
-        int puntosError = 0;
-
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (List<PuntoMalla> batch : batches) {
-            CompletableFuture<Void> future = openMeteoClient
-                    .getForecastBatch(batch)
-                    .thenAccept(responses -> {
-                        for (int i = 0; i < responses.length; i++) {
-                            meteoRepository.upsertForecast(batch.get(i), responses[i]);
-                            try {
-                                Thread.sleep(200);
-                            } catch (InterruptedException e) {
-                                log.warn("Error guardando punto {}: {}", batch.get(i), e.getMessage());
-                            }
-                            log.info("Batch {} OK — {} puntos guardados en Redis", batch.size());
-                        }
-                    })
-                    .exceptionally(e -> {
-                        log.error("Error en batch forecast: {}", e.getMessage());
-                        return null;
-                    });
-            futures.add(future);
-        }
-
-        // Esperar a todos los batches
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-        long duracion = System.currentTimeMillis() - inicio;
-        log.info("=== JOB FORECAST completado en {}ms ===", duracion);
-        meteoRepository.logJob("FORECAST", "OK", mallaEspana.size(), puntosOk, puntosError, duracion, null);
-    }
+//    @Scheduled(cron = "${meteo.jobs.forecast-cron}")
+//    public void jobForecast() {
+//        log.info("=== JOB FORECAST iniciado. {} puntos totales ===", mallaEspana.size());
+//        long inicio = System.currentTimeMillis();
+//        int puntosOk = 0;
+//        int puntosError = 0;
+//
+//        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
+//        List<CompletableFuture<Void>> futures = new ArrayList<>();
+//
+//        for (List<PuntoMalla> batch : batches) {
+//            CompletableFuture<Void> future = openMeteoClient
+//                    .getForecastBatch(batch)
+//                    .thenAccept(responses -> {
+//                        for (int i = 0; i < responses.length; i++) {
+//                            meteoRepository.upsertForecast(batch.get(i), responses[i]);
+//                            try {
+//                                Thread.sleep(200);
+//                            } catch (InterruptedException e) {
+//                                log.warn("Error guardando punto {}: {}", batch.get(i), e.getMessage());
+//                            }
+//                            log.info("Batch {} OK — {} puntos guardados en Redis", batch.size());
+//                        }
+//                    })
+//                    .exceptionally(e -> {
+//                        log.error("Error en batch forecast: {}", e.getMessage());
+//                        return null;
+//                    });
+//            futures.add(future);
+//        }
+//
+//        // Esperar a todos los batches
+//        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+//
+//        long duracion = System.currentTimeMillis() - inicio;
+//        log.info("=== JOB FORECAST completado en {}ms ===", duracion);
+//        meteoRepository.logJob("FORECAST", "OK", mallaEspana.size(), puntosOk, puntosError, duracion, null);
+//    }
 
     // -------------------------------------------------------
     // JOB 2: DATOS ACTUALES (cada hora)
@@ -183,47 +196,78 @@ public class MeteoJobService {
                 duracion,
                 batchesError.get() > 0 ? batchesError.get() + " batches fallidos" : null
         );
+        generarRasterTemperatura();
+    }
+
+    private void generarRasterTemperatura() {
+        try {
+            log.info("Generando raster de temperatura...");
+
+            // 2. Convertir a PuntoTemperatura
+            List<PuntoTemperatura> puntos = redisCurrentRepository.getAllCurrentEspana()
+                    .stream()
+                    .map(p -> new PuntoTemperatura(
+                            ((Number) p.get("latitud")).doubleValue(),
+                            ((Number) p.get("longitud")).doubleValue(),
+                            ((Number) p.getOrDefault("temperature_2m", 15.0)).doubleValue()
+                    ))
+                    .toList();
+
+            // 3. Interpolar a 0.05°
+            List<PuntoTemperatura> grid = interpolacionService.interpolarGrid(puntos);
+            log.info("Grid interpolado: {} puntos", grid.size());
+
+            // 4. Generar PNG
+            byte[] png = rasterService.generarPng(grid);
+            log.info("PNG generado: {} bytes", png.length);
+
+            // 5. Guardar en Redis
+            redisRasterRepository.saveRasterTemperatura(png);
+
+        } catch (Exception e) {
+            log.error("Error generando raster: {}", e.getMessage());
+        }
     }
 
     // -------------------------------------------------------
     // JOB 3: HISTÓRICO (cada día a las 3:30am - archiva ayer)
     // -------------------------------------------------------
-    @Scheduled(cron = "${meteo.jobs.historical-cron}")
-    public void jobHistorico() {
-        String aWeekAgo = LocalDate.now().minusDays(7)
-                .format(DateTimeFormatter.ISO_LOCAL_DATE);
-        log.info("=== JOB HISTÓRICO iniciado para fecha: {} ===", aWeekAgo);
-        long inicio = System.currentTimeMillis();
-
-        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.CHUNK_SIZE);
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (List<PuntoMalla> batch : batches) {
-            CompletableFuture<Void> future = openMeteoClient
-                    .getHistoricoBatch(batch, aWeekAgo, aWeekAgo)
-                    .thenAccept(responses -> {
-                        for (int i = 0; i < responses.length; i++) {
-                            meteoRepository.upsertHistorico(batch.get(i), responses[i]);
-                            try {
-                                Thread.sleep(200);
-                            } catch (InterruptedException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                    })
-                    .exceptionally(e -> {
-                        log.error("Error en batch histórico: {}", e.getMessage());
-                        return null;
-                    });
-            futures.add(future);
-        }
-
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-        long duracion = System.currentTimeMillis() - inicio;
-        log.info("=== JOB HISTÓRICO completado en {}ms ===", duracion);
-        meteoRepository.logJob("HISTORICAL", "OK", mallaEspana.size(), 0, 0, duracion, null);
-    }
+//    @Scheduled(cron = "${meteo.jobs.historical-cron}")
+//    public void jobHistorico() {
+//        String aWeekAgo = LocalDate.now().minusDays(7)
+//                .format(DateTimeFormatter.ISO_LOCAL_DATE);
+//        log.info("=== JOB HISTÓRICO iniciado para fecha: {} ===", aWeekAgo);
+//        long inicio = System.currentTimeMillis();
+//
+//        List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, Constantes.CHUNK_SIZE);
+//        List<CompletableFuture<Void>> futures = new ArrayList<>();
+//
+//        for (List<PuntoMalla> batch : batches) {
+//            CompletableFuture<Void> future = openMeteoClient
+//                    .getHistoricoBatch(batch, aWeekAgo, aWeekAgo)
+//                    .thenAccept(responses -> {
+//                        for (int i = 0; i < responses.length; i++) {
+//                            meteoRepository.upsertHistorico(batch.get(i), responses[i]);
+//                            try {
+//                                Thread.sleep(200);
+//                            } catch (InterruptedException e) {
+//                                throw new RuntimeException(e);
+//                            }
+//                        }
+//                    })
+//                    .exceptionally(e -> {
+//                        log.error("Error en batch histórico: {}", e.getMessage());
+//                        return null;
+//                    });
+//            futures.add(future);
+//        }
+//
+//        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+//
+//        long duracion = System.currentTimeMillis() - inicio;
+//        log.info("=== JOB HISTÓRICO completado en {}ms ===", duracion);
+//        meteoRepository.logJob("HISTORICAL", "OK", mallaEspana.size(), 0, 0, duracion, null);
+//    }
 
     // -------------------------------------------------------
     // Utilidad: dividir lista en sublistas de tamaño n

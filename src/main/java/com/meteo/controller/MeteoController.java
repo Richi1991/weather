@@ -1,6 +1,7 @@
 package com.meteo.controller;
 
 import com.meteo.dto.CurrentGridDTO;
+import com.meteo.repository.RedisRasterRepository;
 import com.meteo.service.MeteoBboxService;
 import com.meteo.service.MeteoQueryService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,10 +24,26 @@ public class MeteoController {
     @Autowired
     private MeteoBboxService bboxService;
 
+    @Autowired
+    private RedisRasterRepository redisRasterRepository;
 
     // -------------------------------------------------------
     // MAPA MUNDIAL (heatmap al desplazar)
     // -------------------------------------------------------
+
+    @GetMapping("/raster/temperatura")
+    public ResponseEntity<byte[]> getRasterTemperatura() {
+        byte[] png = redisRasterRepository.getRasterTemperatura();
+
+        if (png == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        return ResponseEntity.ok()
+                .header("Content-Type", "image/png")
+                .header("Cache-Control", "max-age=3600")
+                .body(png);
+    }
 
     /**
      * Heatmap de precipitación para el bbox visible en el mapa.
