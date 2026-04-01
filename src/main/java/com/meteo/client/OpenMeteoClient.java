@@ -23,6 +23,7 @@ public class OpenMeteoClient {
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
+            .version(HttpClient.Version.HTTP_1_1)  // ← forzar HTTP/1.1
             .build();
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

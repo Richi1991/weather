@@ -20,6 +20,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.meteo.common.Constantes.BATCH_SIZE;
 
@@ -82,8 +83,9 @@ public class MeteoJobService {
                             try {
                                 Thread.sleep(200);
                             } catch (InterruptedException e) {
-                                throw new RuntimeException(e);
+                                log.warn("Error guardando punto {}: {}", batch.get(i), e.getMessage());
                             }
+                            log.info("Batch {} OK — {} puntos guardados en Redis", batch.size());
                         }
                     })
                     .exceptionally(e -> {
@@ -111,12 +113,18 @@ public class MeteoJobService {
 
         List<List<PuntoMalla>> batches = dividirEnBatches(mallaEspana, BATCH_SIZE);
 
+        AtomicInteger puntosOk    = new AtomicInteger(0);
+        AtomicInteger puntosError = new AtomicInteger(0);
+        AtomicInteger batchesOk   = new AtomicInteger(0);
+        AtomicInteger batchesError = new AtomicInteger(0);
+
         for (int b = 0; b < batches.size(); b++) {
             List<PuntoMalla> batch = batches.get(b);
             int intentos = 0;
             int maxIntentos = 3;
+            boolean exito = false;
 
-            while (intentos < maxIntentos) {
+            while (intentos < maxIntentos && !exito) {
                 try {
                     
                     OpenMeteoResponse[] responses = openMeteoClient
@@ -124,12 +132,18 @@ public class MeteoJobService {
                             .get();
 
                     for (int i = 0; i < responses.length; i++) {
-                        redisCurrentRepository.saveCurrent(batch.get(i), responses[i]);
+                        try {
+                            redisCurrentRepository.saveCurrent(batch.get(i), responses[i]);
+                            puntosOk.incrementAndGet();
+                        } catch (Exception e) {
+                            puntosError.incrementAndGet();
+                            log.warn("Error guardando punto {}: {}", batch.get(i), e.getMessage());
+                        }
                     }
 
-                    Thread.sleep(10000);
-                    
-                    break; // éxito — salir del while
+                    batchesOk.incrementAndGet();
+                    exito = true;
+                    Thread.sleep(15_000);
 
                 } catch (Exception e) {
                     intentos++;
@@ -144,11 +158,31 @@ public class MeteoJobService {
                     }
                 }
             }
+            if (!exito && intentos >= maxIntentos) {
+                log.error("Batch {} fallido tras {} intentos — {} puntos perdidos",
+                        b, maxIntentos, batch.size());
+                batchesError.incrementAndGet();
+                puntosError.addAndGet(batch.size());
+            }
         }
 
         long duracion = System.currentTimeMillis() - inicio;
+
         log.info("=== JOB CURRENT completado en {}ms ===", duracion);
-        meteoRepository.logJob("CURRENT", "OK", mallaEspana.size(), 0, 0, duracion, null);
+        log.info("    Batches → OK: {} | ERROR: {} | Total: {}",
+                batchesOk.get(), batchesError.get(), batches.size());
+        log.info("    Puntos  → OK: {} | ERROR: {} | Total: {}",
+                puntosOk.get(), puntosError.get(), mallaEspana.size());
+
+        meteoRepository.logJob(
+                "CURRENT",
+                batchesError.get() == 0 ? "OK" : "PARTIAL",
+                mallaEspana.size(),
+                puntosOk.get(),
+                puntosError.get(),
+                duracion,
+                batchesError.get() > 0 ? batchesError.get() + " batches fallidos" : null
+        );
     }
 
     // -------------------------------------------------------
